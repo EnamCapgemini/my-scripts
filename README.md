@@ -1,67 +1,76 @@
-#!/bin/bash
+import requests
+import json
 
-# Function to fetch connector configuration
-fetch_connector_config() {
-    local connector_name="$1"
-    local connect_url="$2"
-    curl -s "${connect_url}/connectors/${connector_name}/config"
-}
+def fetch_connector_config(connector_name, connect_url):
+    try:
+        response = requests.get(f"{connect_url}/connectors/{connector_name}/config")
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        print(f"Error fetching connector configuration for {connector_name}: {e}")
+        return None
 
-# Function to read JDBC URL from properties file
-read_jdbc_url_from_properties() {
-    local file_path="$1"
-    local jdbc_url
-    jdbc_url=$(grep '^URL=' "$file_path" | cut -d'=' -f2)
-    echo "$jdbc_url"
-}
+def read_jdbc_url_from_properties(file_path):
+    jdbc_url = None
+    try:
+        with open(file_path, 'r') as file:
+            properties = file.readlines()
+            for prop in properties:
+                key, value = prop.strip().split('=')
+                if key.strip() == 'URL':
+                    jdbc_url = value.strip()
+                    break
+    except Exception as e:
+        print(f"Error reading JDBC URL from properties file: {e}")
+    return jdbc_url
 
-# Function to update connector configuration with new JDBC URL
-update_connector_config() {
-    local connector_config="$1"
-    local jdbc_url="$2"
-    echo "$connector_config" | jq ".config.\"connection.url\" = \"$jdbc_url\""
-}
+def update_connector_config(connector_config, jdbc_url):
+    if 'connection.url' in connector_config['config']:
+        connector_config['config']['connection.url'] = jdbc_url
+    else:
+        print("No 'connection.url' property found in connector configuration.")
+    return connector_config
 
-# Function to update connector configuration via REST API
-update_connector_config_via_rest() {
-    local connector_name="$1"
-    local connector_config="$2"
-    local connect_url="$3"
-    curl -s -X PUT -H "Content-Type: application/json" -d "$connector_config" "${connect_url}/connectors/${connector_name}/config" >/dev/null
-}
+def update_connector_config_via_rest(connector_name, connector_config, connect_url):
+    try:
+        response = requests.put(f"{connect_url}/connectors/{connector_name}/config", 
+                                headers={"Content-Type": "application/json"},
+                                data=json.dumps(connector_config))
+        response.raise_for_status()
+        print(f"Connector configuration updated successfully for {connector_name}.")
+    except Exception as e:
+        print(f"Error updating connector configuration for {connector_name}: {e}")
 
-# Main function
-main() {
-    connect_url="http://kfk-conn-svc:8083"  # Kafka Connect REST API URL
-    connector_names_file="/path/to/connector_names.txt"  # Path to file containing list of connector names
-    properties_file_path="/secret/kafka_con_db.properties"  # Path to properties file
+def main():
+    connect_url = "http://kfk-conn-svc:8083"  # Kafka Connect REST API URL
+    connector_names_file = "/path/to/connector_names.txt"  # Path to file containing list of connector names
+    properties_file_path = "/secret/kafka_con_db.properties"  # Path to properties file
 
-    # Read list of connector names from file
-    while IFS= read -r connector_name; do
-        echo "Processing connector: $connector_name"
+    # Step 1: Read list of connector names from file
+    with open(connector_names_file, 'r') as file:
+        connector_names = file.readlines()
+        connector_names = [name.strip() for name in connector_names]
 
-        # Fetch connector configuration
-        connector_config=$(fetch_connector_config "$connector_name" "$connect_url")
-        if [ -z "$connector_config" ]; then
-            echo "Error fetching connector configuration for $connector_name"
+    # Step 2: Process each connector entry
+    for connector_name in connector_names:
+        print(f"Processing connector: {connector_name}")
+
+        # Step 3: Fetch connector configuration
+        connector_config = fetch_connector_config(connector_name, connect_url)
+        if not connector_config:
             continue
-        fi
 
-        # Read JDBC URL from properties file
-        jdbc_url=$(read_jdbc_url_from_properties "$properties_file_path")
-        if [ -z "$jdbc_url" ]; then
-            echo "Skipping connector $connector_name due to missing JDBC URL from properties file."
+        # Step 4: Read JDBC URL from properties file
+        jdbc_url = read_jdbc_url_from_properties(properties_file_path)
+        if not jdbc_url:
+            print("Skipping connector due to missing JDBC URL from properties file.")
             continue
-        fi
 
-        # Update connector configuration with new JDBC URL
-        updated_connector_config=$(update_connector_config "$connector_config" "$jdbc_url")
+        # Step 5: Update connector configuration with the new JDBC URL
+        updated_connector_config = update_connector_config(connector_config, jdbc_url)
 
-        # Update connector configuration via REST API
-        update_connector_config_via_rest "$connector_name" "$updated_connector_config" "$connect_url"
-        echo "Connector configuration updated successfully for $connector_name"
-    done < "$connector_names_file"
-}
+        # Step 6: Update connector configuration via REST API
+        update_connector_config_via_rest(connector_name, updated_connector_config, connect_url)
 
-# Run main function
-main
+if __name__ == "__main__":
+    main()
